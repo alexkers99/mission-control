@@ -50,3 +50,8 @@ docs/_*.png
 
 # IDE state
 .vs/
+
+# Local dev tunnel
+.tunnel_url
+run-mc.sh
+run-tunnel.sh

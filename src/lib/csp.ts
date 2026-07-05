@@ -1,12 +1,13 @@
 export function buildMissionControlCsp(input: { nonce: string; googleEnabled: boolean }): string {
   const { nonce, googleEnabled } = input
+  const isDev = process.env.NODE_ENV !== 'production'
 
   return [
     `default-src 'self'`,
     `base-uri 'self'`,
     `object-src 'none'`,
     `frame-ancestors 'none'`,
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' blob:${googleEnabled ? ' https://accounts.google.com' : ''}`,
+    `script-src 'self'${isDev ? " 'unsafe-eval'" : ''} 'nonce-${nonce}' 'strict-dynamic' blob:${googleEnabled ? ' https://accounts.google.com' : ''}`,
     `style-src 'self' 'unsafe-inline'`,
     `style-src-elem 'self' 'unsafe-inline'`,
     `style-src-attr 'unsafe-inline'`,
