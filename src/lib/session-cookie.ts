@@ -33,6 +33,16 @@ function envFlag(name: string): boolean | undefined {
   return undefined
 }
 
+function sameSiteFromEnv(): 'strict' | 'lax' | 'none' {
+  const raw = String(process.env.MC_COOKIE_SAMESITE || '').trim().toLowerCase()
+  if (raw === 'strict' || raw === 'lax' || raw === 'none') return raw
+  // 'lax' is the correct default for a session cookie that must survive an
+  // OAuth redirect callback (Google -> our /api/auth/google/callback -> our '/').
+  // 'strict' can get silently dropped by some browsers' cross-site-redirect
+  // tracking mitigations even though the final hop is same-site, breaking login.
+  return 'lax'
+}
+
 export function getMcSessionCookieOptions(input: { maxAgeSeconds: number; isSecureRequest?: boolean }): Partial<ResponseCookie> {
   const secureEnv = envFlag('MC_COOKIE_SECURE')
   const isProduction = process.env.NODE_ENV === 'production'
@@ -41,7 +51,7 @@ export function getMcSessionCookieOptions(input: { maxAgeSeconds: number; isSecu
   return {
     httpOnly: true,
     secure,
-    sameSite: 'strict',
+    sameSite: sameSiteFromEnv(),
     maxAge: input.maxAgeSeconds,
     path: '/',
   }

@@ -26,6 +26,54 @@ function upsertAccessRequest(input: {
   `).run(input.email.toLowerCase(), input.providerUserId, input.displayName, input.avatarUrl || null)
 }
 
+/**
+ * GET handler: redirect the browser to Google's OAuth 2.0 authorization endpoint.
+ * Uses the authorization code flow (response_type=code), which requires no GSI
+ * library and works regardless of FedCM deprecations.
+ */
+export async function GET(request: NextRequest) {
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || ''
+    if (!clientId) {
+      return NextResponse.json({ error: 'Google client ID not configured' }, { status: 500 })
+    }
+
+    // Derive the redirect URI from the request so it stays correct behind proxies
+    const protocol = request.headers.get('x-forwarded-proto') || 'https'
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || 'localhost:3000'
+    const redirectUri = `${protocol}://${host}/api/auth/google/callback`
+
+    // Generate a CSRF state token and store it in a session cookie
+    const state = randomBytes(32).toString('hex')
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      scope: 'openid email profile',
+      state,
+      prompt: 'select_account',
+    })
+
+    const redirectResponse = NextResponse.redirect(
+      `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`
+    )
+
+    // Set state cookie for CSRF verification (short-lived, httpOnly)
+    redirectResponse.cookies.set('google_oauth_state', state, {
+      httpOnly: true,
+      secure: protocol === 'https',
+      sameSite: 'lax',
+      maxAge: 60 * 10, // 10 minutes
+      path: '/api/auth/google',
+    })
+
+    return redirectResponse
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || 'Failed to initiate Google login' }, { status: 500 })
+  }
+}
+
 export async function POST(request: NextRequest) {
   const rateCheck = loginLimiter(request)
   if (rateCheck) return rateCheck

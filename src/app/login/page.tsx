@@ -1,33 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, FormEvent } from 'react'
+import { useCallback, useEffect, useState, FormEvent } from 'react'
 import Image from 'next/image'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { LanguageSwitcherSelect } from '@/components/ui/language-switcher'
 import { STORAGE_GATEWAY_URL } from '@/lib/device-identity'
 
-interface GoogleCredentialResponse {
-  credential?: string
-}
-
-interface GoogleAccountsIdApi {
-  initialize(config: {
-    client_id: string
-    callback: (response: GoogleCredentialResponse) => void
-  }): void
-  prompt(): void
-}
-
-interface GoogleApi {
-  accounts: {
-    id: GoogleAccountsIdApi
-  }
-}
-
-type LoginRequestBody =
-  | { username: string; password: string }
-  | { credential?: string }
+type LoginRequestBody = { username: string; password: string }
 
 type LoginErrorPayload = {
   code?: string
@@ -42,12 +22,6 @@ function readLoginErrorPayload(value: unknown): LoginErrorPayload {
     code: typeof record.code === 'string' ? record.code : undefined,
     error: typeof record.error === 'string' ? record.error : undefined,
     hint: typeof record.hint === 'string' ? record.hint : undefined,
-  }
-}
-
-declare global {
-  interface Window {
-    google?: GoogleApi
   }
 }
 
@@ -83,9 +57,6 @@ export default function LoginPage() {
   const [pendingApproval, setPendingApproval] = useState(false)
   const [needsSetup, setNeedsSetup] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [googleLoading, setGoogleLoading] = useState(false)
-  const [googleReady, setGoogleReady] = useState(false)
-  const googleCallbackRef = useRef<((response: GoogleCredentialResponse) => void) | null>(null)
 
   // Advanced settings state
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -99,6 +70,24 @@ export default function LoginPage() {
   const [gatewayCustom, setGatewayCustom] = useState('')
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('idle')
   const [connectionError, setConnectionError] = useState('')
+
+  // Read the ?error= param the Google OAuth redirect callback lands with —
+  // without this, a server-side redirect to /login?error=... rendered as a
+  // plain fresh page load with no indication anything happened.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oauthError = params.get('error')
+    if (!oauthError) return
+
+    if (oauthError === 'google_pending') {
+      setPendingApproval(true)
+    } else {
+      setError(t('googleSignInFailed'))
+    }
+
+    // Strip the query param so a refresh doesn't re-trigger this
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [t])
 
   // Initialize gateway URL from localStorage on mount
   useEffect(() => {
@@ -202,21 +191,18 @@ export default function LoginPage() {
         setNeedsSetup(false)
         setError('')
         setLoading(false)
-        setGoogleLoading(false)
         return false
       }
       if (data.code === 'NO_USERS') {
         setNeedsSetup(true)
         setError('')
         setLoading(false)
-        setGoogleLoading(false)
         return false
       }
       setError(data.error || t('loginFailed'))
       setPendingApproval(false)
       setNeedsSetup(false)
       setLoading(false)
-      setGoogleLoading(false)
       return false
     }
 
@@ -242,51 +228,6 @@ export default function LoginPage() {
       setError(t('networkError'))
       setLoading(false)
     }
-  }
-
-  // Initialize Google Sign-In SDK (hidden prompt mode)
-  useEffect(() => {
-    if (!googleClientId) return
-
-    const onScriptLoad = () => {
-      if (!window.google) return
-      googleCallbackRef.current = async (response: GoogleCredentialResponse) => {
-        setError('')
-        setGoogleLoading(true)
-        try {
-          const ok = await completeLogin('/api/auth/google', { credential: response?.credential })
-          if (!ok) return
-        } catch {
-          setError(t('googleSignInFailed'))
-          setGoogleLoading(false)
-        }
-      }
-      window.google.accounts.id.initialize({
-        client_id: googleClientId,
-        callback: (response: GoogleCredentialResponse) => googleCallbackRef.current?.(response),
-      })
-      setGoogleReady(true)
-    }
-
-    const existing = document.querySelector('script[data-google-gsi="1"]') as HTMLScriptElement | null
-    if (existing) {
-      if (window.google) onScriptLoad()
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = 'https://accounts.google.com/gsi/client'
-    script.async = true
-    script.defer = true
-    script.setAttribute('data-google-gsi', '1')
-    script.onload = onScriptLoad
-    script.onerror = () => setError(t('googleSignInFailed'))
-    document.head.appendChild(script)
-  }, [googleClientId, completeLogin, t])
-
-  const handleGoogleSignIn = () => {
-    if (!window.google || !googleReady) return
-    window.google.accounts.id.prompt()
   }
 
   return (
@@ -323,7 +264,7 @@ export default function LoginPage() {
               {t('accessRequestDescription')}
             </p>
             <Button
-              onClick={() => { setPendingApproval(false); setError(''); setGoogleLoading(false) }}
+              onClick={() => { setPendingApproval(false); setError('') }}
               variant="ghost"
               size="sm"
               className="mt-3 text-xs"
@@ -456,30 +397,18 @@ export default function LoginPage() {
           )}
         </div>
 
-        {/* Google Sign-In button — shown only when client ID is configured */}
+        {/* Google Sign-In button — shown only when client ID is configured. Plain redirect
+            to the OAuth 2.0 authorization-code flow (GET /api/auth/google) — no JS SDK,
+            no FedCM dependency, works regardless of Google's One Tap deprecations. */}
         {googleClientId && (
           <div className={pendingApproval ? 'opacity-50 pointer-events-none' : ''}>
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              disabled={!googleReady || googleLoading || loading}
-              className="w-full h-10 flex items-center justify-center gap-3 rounded-lg border border-border bg-white text-[#3c4043] text-sm font-medium hover:bg-gray-50 focus:outline-hidden focus:ring-2 focus:ring-primary/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            <a
+              href="/api/auth/google"
+              className="w-full h-10 flex items-center justify-center gap-3 rounded-lg border border-border bg-white text-[#3c4043] text-sm font-medium hover:bg-gray-50 focus:outline-hidden focus:ring-2 focus:ring-primary/50 transition-colors"
             >
-              {googleLoading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
-                  {t('signingIn')}
-                </>
-              ) : (
-                <>
-                  <GoogleIcon className="w-[18px] h-[18px]" />
-                  {t('signInWithGoogle')}
-                </>
-              )}
-            </button>
-            {!googleReady && (
-              <p className="text-center text-xs text-muted-foreground mt-2">{t('loadingGoogleSignIn')}</p>
-            )}
+              <GoogleIcon className="w-[18px] h-[18px]" />
+              {t('signInWithGoogle')}
+            </a>
 
             {/* Divider */}
             <div className="my-4 flex items-center gap-2">
