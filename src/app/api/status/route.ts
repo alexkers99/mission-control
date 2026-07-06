@@ -527,19 +527,30 @@ async function performHealthCheck() {
     })
   }
 
-  // Check gateway connection
+  // Check gateway connection (optional when NEXT_PUBLIC_GATEWAY_OPTIONAL=true)
+  const gatewayOptional = process.env.NEXT_PUBLIC_GATEWAY_OPTIONAL === 'true'
   try {
     const gatewayStatus = await getGatewayStatus()
+    if (!gatewayStatus.running && gatewayOptional) {
+      health.checks.push({
+        name: 'Gateway',
+        status: 'skipped',
+        message: 'Gateway integration disabled (optional)'
+      })
+    } else {
+      health.checks.push({
+        name: 'Gateway',
+        status: gatewayStatus.running ? 'healthy' : 'unhealthy',
+        message: gatewayStatus.running ? 'Gateway is running' : 'Gateway is not running'
+      })
+    }
+  } catch {
     health.checks.push({
       name: 'Gateway',
-      status: gatewayStatus.running ? 'healthy' : 'unhealthy',
-      message: gatewayStatus.running ? 'Gateway is running' : 'Gateway is not running'
-    })
-  } catch (error) {
-    health.checks.push({
-      name: 'Gateway',
-      status: 'error',
-      message: 'Failed to check gateway status'
+      status: gatewayOptional ? 'skipped' : 'error',
+      message: gatewayOptional
+        ? 'Gateway integration disabled (optional)'
+        : 'Failed to check gateway status'
     })
   }
 
